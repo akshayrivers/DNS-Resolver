@@ -1,4 +1,6 @@
 use std::io;
+use std::net::UdpSocket;
+use std::time::Duration;
 #[derive(Debug)]
 pub struct DnsHeader {
     // header section - 12 bytes
@@ -88,6 +90,114 @@ impl DnsMessage {
 
         bytes
     }
+
+    pub fn from_bytes(buf: &[u8]) -> Self {
+        // Now we know that the header section is of 12 bytes from the start
+        // 0-11 now we get the data for the next bytes from this like how many questions[qname,qtype,qclass], [RR]answers, authority , additional info
+
+        // Parse header (first 12 bytes)
+        let header = DnsHeader {
+            identification: u16::from_be_bytes([buf[0], buf[1]]),
+            flags: u16::from_be_bytes([buf[2], buf[3]]),
+            no_of_questions: u16::from_be_bytes([buf[4], buf[5]]),
+            no_of_answers_rr: u16::from_be_bytes([buf[6], buf[7]]),
+            no_of_authority_rr: u16::from_be_bytes([buf[8], buf[9]]),
+            no_of_additional_rr: u16::from_be_bytes([buf[10], buf[11]]),
+        };
+
+        // Questions = no of questions x [qname,qtype,qclass]
+        // now qtype and q class are of fixed size 2 bytes
+        // and qname ends with a zero-length byte (0) 7example3com0 so that is how we will parse Questions
+
+        let mut pos = 12; // after header
+        let mut questions = Vec::new();
+
+        for _ in 0..header.no_of_questions {
+            let (qname, next_pos) = parse_qname(buf, pos);
+            pos = next_pos;
+            let qtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+            pos += 2;
+            let qclass = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+            pos += 2;
+            questions.push(DnsQuestion {
+                qname,
+                qtype,
+                qclass,
+            });
+        }
+
+        // Answers, Authority, Additional - Are all resource records x no.of items(from header)
+        // type=2 class=2 TTL=4 rd_length=2 and rd_data encompasses rd length
+        // the name hah! is saved often using pointer compression. And what is pointer compression you ask?
+        // well this is what chat gpt told me:
+
+        // And this is what I understood:
+
+        fn parse_rr(buf: &[u8], mut pos: usize) -> (ResourceRecord, usize) {
+            let (name, new_pos) = parse_qname(buf, pos);
+            pos = new_pos;
+
+            let rr_type = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+            pos += 2;
+
+            let class = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+            pos += 2;
+
+            let ttl = u32::from_be_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+            pos += 4;
+
+            let rdlength = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+            pos += 2;
+
+            let rdata = buf[pos..pos + rdlength as usize].to_vec();
+            pos += rdlength as usize;
+
+            (
+                ResourceRecord {
+                    name,
+                    rr_type,
+                    class,
+                    ttl,
+                    rdlength,
+                    rdata,
+                },
+                pos,
+            )
+        }
+
+        let mut answers = Vec::new();
+        for _ in 0..header.no_of_answers_rr {
+            let (rr, new_pos) = parse_rr(buf, pos);
+            pos = new_pos;
+            answers.push(rr);
+        }
+
+        let mut authority = Vec::new();
+        for _ in 0..header.no_of_authority_rr {
+            let (rr, new_pos) = parse_rr(buf, pos);
+            pos = new_pos;
+            authority.push(rr);
+        }
+
+        let mut additional = Vec::new();
+        for _ in 0..header.no_of_additional_rr {
+            let (rr, new_pos) = parse_rr(buf, pos);
+            pos = new_pos;
+            additional.push(rr);
+        }
+
+        DnsMessage {
+            header,
+            question: questions.into_iter().next().unwrap_or(DnsQuestion {
+                qname: "".to_string(),
+                qtype: 0,
+                qclass: 0,
+            }),
+            answers,
+            authority,
+            additional,
+        }
+    }
 }
 
 pub fn input_url() -> DnsMessage {
@@ -97,4 +207,32 @@ pub fn input_url() -> DnsMessage {
     let url = input.trim();
     let msg = DnsMessage::new(url.to_owned());
     return msg;
+}
+
+pub fn send_message(msg: DnsMessage) -> DnsMessage {
+    // 1. creating a DNS message and then turning it into bytes and then send it to the 8.8.8.8 for now we are not handling the complexities ourself
+    let server = "8.8.8.8:53"; // Google DNS
+    let socket = UdpSocket::bind("0.0.0.0:0").expect("could not bind to address");
+
+    // Optional: set a timeout
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let message_bytes = msg.to_bytes();
+
+    // Send to DNS server
+    socket
+        .send_to(&message_bytes, server)
+        .expect("failed to send DNS query");
+
+    // Receive response
+    let mut buf = [0u8; 512]; // Max size for a DNS response is 512 bytes
+    let (size, _) = socket
+        .recv_from(&mut buf)
+        .expect("did not receive a response");
+
+    // okay so now we have our bytes with us from in the buf so we try to parse it into the message again
+    let res = DnsMessage::from_bytes(&buf[..size]);
+    res
 }
