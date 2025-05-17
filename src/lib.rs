@@ -49,7 +49,7 @@ impl DnsMessage {
 
         let question = DnsQuestion {
             qname: url,
-            qtype: 28, // A record  we are hardcoding it 1-Ipv4 , 2-NS ,5- CName,15-MX, 28-Ipv6
+            qtype: 1, // A record  we are hardcoding it 1-Ipv4 , 2-NS ,5- CName,15-MX, 28-Ipv6
             qclass: 1, // IN (Internet)
         };
 
@@ -182,93 +182,6 @@ impl DnsMessage {
             pos = new_pos;
             additional.push(rr);
         }
-        // okay this is made to handle name parsing I. Qusetion we just see if byte is 00 for eg: 03 'w' 'w' 'w' 07 'e' 'x' 'a' 'm' 'p' 'l' 'e' 03 'c' 'o' 'm' 00
-        // II. okay so pointer compression is just that we don't waste bytes we just add the pointer the names where it has appeared before in the buffer
-        // The first two bits of a length byte set to 11 (binary) or 0xC0 (hex) indicate a pointer
-        // The next 14 bits represent the offset in the message where the rest of the domain name can be found.
-        //         Example:
-        // Suppose somewhere in the DNS message, at position 20, we already had:
-
-        // 07 'e' 'x' 'a' 'm' 'p' 'l' 'e' 03 'c' 'o' 'm' 00
-        // Later, instead of repeating "example.com", the message can use a pointer like:
-
-        // C0 14
-        // C0 = 11000000 binary → pointer marker
-        // 14 (hex) = 20 decimal → offset to position 20 where "example.com" starts
-        fn parse_qname(buf: &[u8], mut pos: usize) -> (String, usize) {
-            let mut labels = Vec::new();
-            let mut jumped = false;
-            let mut original_pos = 0;
-
-            loop {
-                let byte = buf[pos];
-
-                // Checking if the first two bits are 1 1 (pointer)
-                if byte & 0b11000000 == 0b11000000 {
-                    let second_byte = buf[pos + 1];
-                    // this part is fucking hell
-
-                    // “Just stick the two bytes together — that’s the pointer, right?”
-                    // But what we really need is:
-
-                    // “Use the last 6 bits of the first byte and all 8 bits of the second byte to build a 14-bit number.
-
-                    // lets take another example: a very simple and plain analogy:
-                    // If you have two digits: 4 and 2, and you want to make 42, you multiply the first by 10 and add the second.
-
-                    // In binary:
-                    // If you have two bytes: 0x01 and 0x0C, and want to make 0x010C, you shift the first by 8 and add the second.
-
-                    // now we extract the pointer
-                    // We Remove the two high bits 11000000 because they just show the that the next 14 bits is a pointer
-                    let upper_pointer_bits = byte ^ 0b11000000;
-
-                    //  shift left by 8 bits - well the first 6 bits of the pointer contribution
-                    // keep in mind that the pointer is still 2 bytes that is why we cast it left by 8 bits
-                    let upper_offset = (upper_pointer_bits as u16) << 8;
-
-                    let lower_offset = second_byte as u16;
-
-                    // We Add(OR) the two parts into the full 14-bit offset which is actually u16
-                    let pointer_offset = upper_offset | lower_offset;
-
-                    // Save current position only the first time we jump
-                    if !jumped {
-                        original_pos = pos + 2; // like from where do we continue after this
-                    }
-
-                    pos = pointer_offset as usize;
-                    jumped = true;
-                    continue;
-                }
-
-                // If byte is 0, end of the QNAME hex(00)
-                if byte == 0 {
-                    pos += 1;
-                    break;
-                }
-
-                pos += 1;
-
-                let label_length = byte as usize;
-
-                let end = pos + label_length;
-
-                let label = &buf[pos..end];
-
-                labels.push(String::from_utf8_lossy(label).to_string());
-                pos += byte as usize;
-            }
-
-            let qname = labels.join(".");
-
-            // Return the position we stopped at
-            if jumped {
-                (qname, original_pos)
-            } else {
-                (qname, pos)
-            }
-        }
 
         DnsMessage {
             header,
@@ -281,6 +194,94 @@ impl DnsMessage {
             authority,
             additional,
         }
+    }
+}
+
+// okay this is made to handle name parsing I. Qusetion we just see if byte is 00 for eg: 03 'w' 'w' 'w' 07 'e' 'x' 'a' 'm' 'p' 'l' 'e' 03 'c' 'o' 'm' 00
+// II. okay so pointer compression is just that we don't waste bytes we just add the pointer the names where it has appeared before in the buffer
+// The first two bits of a length byte set to 11 (binary) or 0xC0 (hex) indicate a pointer
+// The next 14 bits represent the offset in the message where the rest of the domain name can be found.
+//         Example:
+// Suppose somewhere in the DNS message, at position 20, we already had:
+
+// 07 'e' 'x' 'a' 'm' 'p' 'l' 'e' 03 'c' 'o' 'm' 00
+// Later, instead of repeating "example.com", the message can use a pointer like:
+
+// C0 14
+// C0 = 11000000 binary → pointer marker
+// 14 (hex) = 20 decimal → offset to position 20 where "example.com" starts
+fn parse_qname(buf: &[u8], mut pos: usize) -> (String, usize) {
+    let mut labels = Vec::new();
+    let mut jumped = false;
+    let mut original_pos = 0;
+
+    loop {
+        let byte = buf[pos];
+
+        // Checking if the first two bits are 1 1 (pointer)
+        if byte & 0b11000000 == 0b11000000 {
+            let second_byte = buf[pos + 1];
+            // this part is fucking hell
+
+            // “Just stick the two bytes together — that’s the pointer, right?”
+            // But what we really need is:
+
+            // “Use the last 6 bits of the first byte and all 8 bits of the second byte to build a 14-bit number.
+
+            // lets take another example: a very simple and plain analogy:
+            // If you have two digits: 4 and 2, and you want to make 42, you multiply the first by 10 and add the second.
+
+            // In binary:
+            // If you have two bytes: 0x01 and 0x0C, and want to make 0x010C, you shift the first by 8 and add the second.
+
+            // now we extract the pointer
+            // We Remove the two high bits 11000000 because they just show the that the next 14 bits is a pointer
+            let upper_pointer_bits = byte ^ 0b11000000;
+
+            //  shift left by 8 bits - well the first 6 bits of the pointer contribution
+            // keep in mind that the pointer is still 2 bytes that is why we cast it left by 8 bits
+            let upper_offset = (upper_pointer_bits as u16) << 8;
+
+            let lower_offset = second_byte as u16;
+
+            // We Add(OR) the two parts into the full 14-bit offset which is actually u16
+            let pointer_offset = upper_offset | lower_offset;
+
+            // Save current position only the first time we jump
+            if !jumped {
+                original_pos = pos + 2; // like from where do we continue after this
+            }
+
+            pos = pointer_offset as usize;
+            jumped = true;
+            continue;
+        }
+
+        // If byte is 0, end of the QNAME hex(00)
+        if byte == 0 {
+            pos += 1;
+            break;
+        }
+
+        pos += 1;
+
+        let label_length = byte as usize;
+
+        let end = pos + label_length;
+
+        let label = &buf[pos..end];
+
+        labels.push(String::from_utf8_lossy(label).to_string());
+        pos += byte as usize;
+    }
+
+    let qname = labels.join(".");
+
+    // Return the position we stopped at
+    if jumped {
+        (qname, original_pos)
+    } else {
+        (qname, pos)
     }
 }
 
@@ -319,4 +320,51 @@ pub fn send_message(msg: DnsMessage) -> DnsMessage {
     // okay so now we have our bytes with us from in the buf so we try to parse it into the message again
     let res = DnsMessage::from_bytes(&buf[..size]);
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_round_trip_serialization() {
+        let msg = DnsMessage::new("example.com".to_string());
+        let bytes = msg.to_bytes();
+        let parsed_msg = DnsMessage::from_bytes(&bytes);
+
+        assert_eq!(msg.header.identification, parsed_msg.header.identification);
+        assert_eq!(msg.header.flags, parsed_msg.header.flags);
+        assert_eq!(msg.question.qname, parsed_msg.question.qname);
+        assert_eq!(msg.question.qtype, parsed_msg.question.qtype);
+        assert_eq!(msg.question.qclass, parsed_msg.question.qclass);
+    }
+
+    #[test]
+    fn test_parse_qname_basic() {
+        // example.com encoded as [7]example[3]com[0]
+        let buf = [
+            7u8, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
+        ];
+        let (qname, pos) = parse_qname(&buf, 0);
+        assert_eq!(qname, "example.com");
+        assert_eq!(pos, buf.len());
+    }
+
+    #[test]
+    fn test_parse_qname_with_pointer() {
+        // Buffer layout:
+        // 0..12: 7 'e' 'x' 'a' 'm' 'p' 'l' 'e' 3 'c' 'o' 'm' 0   (example.com)
+        // 12..16: some filler bytes (x, a, c, ... )
+        // 16: pointer 0xC000 (11000000 00000000) pointing to offset 0, i.e. "example.com"
+        // After pointer comes some bytes representing "reachhere" (just filler)
+        let buf = [
+            7u8, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, b'x', b'a',
+            b'c', 0xC0, 0x00, // pointer to offset 0 ("example.com")
+            b'r', b'e', b'a', b'c', b'h', b'h', b'e', b'r', b'e',
+        ];
+
+        let (qname, pos) = parse_qname(&buf, 16);
+        assert_eq!(qname, "example.com");
+        assert_eq!(pos, 18); // pointer consumes 2 bytes
+    }
 }
