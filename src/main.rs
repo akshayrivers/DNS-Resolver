@@ -63,37 +63,69 @@ fn main() {
         match parts[0] {
             "resolve" => {
                 if parts.len() < 2 {
-                    println!("{}Usage: resolve <domain>{}", RED, RESET);
+                    println!("{}Usage: resolve <domain> [type]{}", RED, RESET);
                     continue;
                 }
                 let name = parts[1];
+                let qtype = if parts.len() > 2 {
+                    match parts[2].to_uppercase().as_str() {
+                        "A" => 1,
+                        "AAAA" => 28,
+                        _ => {
+                            println!("{}Unsupported type: {}. Defaulting to A.{}", RED, parts[2], RESET);
+                            1
+                        }
+                    }
+                } else {
+                    1
+                };
+
                 let mut trace = Trace::new();
-                match recursive::resolve(name, 1, &mut cache, &mut trace) {
+                match recursive::resolve(name, qtype, &mut cache, &mut trace) {
                     Ok(msg) => {
                         trace.display();
                         println!("\n{}Final results for {}{}{}:", BOLD, CYAN, name, RESET);
                         for (i, ans) in msg.answers.iter().enumerate() {
-                            if ans.rr_type == 1 {
-                                println!(
-                                    "  {}[{}] {}{} {}.{}.{}.{}",
-                                    GREEN,
-                                    i + 1,
-                                    RESET,
-                                    CYAN,
-                                    ans.rdata[0],
-                                    ans.rdata[1],
-                                    ans.rdata[2],
-                                    ans.rdata[3]
-                                );
-                            } else {
-                                println!(
-                                    "  {}[{}] {}Type {}: {:?}",
-                                    GREEN,
-                                    i + 1,
-                                    RESET,
-                                    ans.rr_type,
-                                    ans.rdata
-                                );
+                            match ans.rr_type {
+                                1 => {
+                                    println!(
+                                        "  {}[{}] {}{} {}.{}.{}.{}",
+                                        GREEN,
+                                        i + 1,
+                                        RESET,
+                                        CYAN,
+                                        ans.rdata[0],
+                                        ans.rdata[1],
+                                        ans.rdata[2],
+                                        ans.rdata[3]
+                                    );
+                                }
+                                28 => {
+                                    let mut ipv6 = String::new();
+                                    for j in 0..8 {
+                                        let part = u16::from_be_bytes([ans.rdata[j * 2], ans.rdata[j * 2 + 1]]);
+                                        ipv6.push_str(&format!("{:x}", part));
+                                        if j < 7 { ipv6.push(':'); }
+                                    }
+                                    println!(
+                                        "  {}[{}] {}{} {}",
+                                        GREEN,
+                                        i + 1,
+                                        RESET,
+                                        CYAN,
+                                        ipv6
+                                    );
+                                }
+                                _ => {
+                                    println!(
+                                        "  {}[{}] {}Type {}: {:?}",
+                                        GREEN,
+                                        i + 1,
+                                        RESET,
+                                        ans.rr_type,
+                                        ans.rdata
+                                    );
+                                }
                             }
                         }
                     }
@@ -169,18 +201,18 @@ fn main() {
             "help" => {
                 println!("\n{}Available Commands:{}", BOLD, RESET);
                 println!(
-                    "  {}resolve{} <domain>   Standard recursive resolution",
+                    "  {}resolve{} <domain> [type] Standard recursive resolution (A, AAAA)",
                     GREEN, RESET
                 );
                 println!(
-                    "  {}poison{}  <domain> <ip> Injects fake data into cache",
+                    "  {}poison{}  <domain> <ip>     Injects fake data into cache",
                     GREEN, RESET
                 );
                 println!(
-                    "  {}spoof{}   <domain> <ip> Simulates packet interception",
+                    "  {}spoof{}   <domain> <ip>     Simulates packet interception",
                     GREEN, RESET
                 );
-                println!("  {}exit{}                Exit the tool", GREEN, RESET);
+                println!("  {}exit{}                  Exit the tool", GREEN, RESET);
             }
             _ => println!("{}Unknown command. Type 'help' for options.{}", RED, RESET),
         }
