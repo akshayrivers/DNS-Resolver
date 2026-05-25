@@ -1,5 +1,8 @@
 # DNS Resolver (RFC 1035) 
 for more details refer to /notesv0.md and notesv1.md
+<img width="949" height="900" alt="Screenshot 2026-05-25 at 1 22 40 AM" src="https://github.com/user-attachments/assets/09b0dde6-92a9-49bf-93f0-1738f65e3da9" />
+
+
 
 A fully functional, recursive DNS resolver implemented in **Rust** from scratch. This project was built to understand the inner workings of the Domain Name System, including packet parsing, pointer compression, and the iterative resolution process.
 
